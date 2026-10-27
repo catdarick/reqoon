@@ -8,8 +8,6 @@ cask "reqoon" do
   desc "Local-first REST client built around OpenAPI specs"
   homepage "https://github.com/catdarick/reqoon"
 
-  depends_on macos: ">= :high_sierra"
-
   app "Reqoon.app"
 
   # The app isn't notarized; without this macOS refuses to open it.
