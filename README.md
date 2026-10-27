@@ -96,6 +96,7 @@ Download the installer for your OS from [Releases](../../releases/latest).
 
 ```bash
 brew tap catdarick/reqoon https://github.com/catdarick/reqoon
+brew trust --cask catdarick/reqoon/reqoon   # newer Homebrew asks to trust casks from third-party taps once
 brew install --cask reqoon
 ```
 
