@@ -8,11 +8,16 @@ cask "reqoon" do
   desc "Local-first REST client built around OpenAPI specs"
   homepage "https://github.com/catdarick/reqoon"
 
+  depends_on :macos
+
   app "Reqoon.app"
 
   # The app isn't notarized; without this macOS refuses to open it.
-  postflight do
-    system_command "/usr/bin/xattr", args: ["-cr", "#{appdir}/Reqoon.app"]
+  postflight_steps do
+    run "/usr/bin/xattr",
+        args:           ["-cr", "{{appdir}}/Reqoon.app"],
+        writable_paths: ["Reqoon.app"],
+        writable_base:  :appdir
   end
 
   zap trash: [
