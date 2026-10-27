@@ -140,7 +140,7 @@ const CollectionNode = memo(function CollectionNode({
     if (fullTree) walk(fullTree);
     return m;
   }, [fullTree]);
-  const allResults = useMemo(() => (spec && searching ? searchEndpoints(spec, query) : []), [spec, query, searching]);
+  const allResults = useMemo(() => (spec && searching ? searchEndpoints(spec, query, c.name) : []), [spec, query, searching, c.name]);
   const activeBase = activeTab ? baseRequestKey(activeTab) : null;
   const results = showHidden ? allResults : allResults.filter((e) => !hidden.has(e.id));
   const hiddenResults = allResults.filter((e) => hidden.has(e.id)).length;
@@ -706,9 +706,9 @@ function SelectionBar() {
   );
 }
 
-function searchEndpoints(spec: ParsedSpec, query: string): Endpoint[] {
+function searchEndpoints(spec: ParsedSpec, query: string, collectionName: string): Endpoint[] {
   return spec.endpoints
-    .map((e) => ({ e, m: matchEndpoint(e, query) }))
+    .map((e) => ({ e, m: matchEndpoint(e, query, collectionName) }))
     .filter((x) => x.m)
     .sort((a, b) => b.m!.score - a.m!.score)
     .map((x) => x.e);

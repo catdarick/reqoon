@@ -348,6 +348,12 @@ describe("search", () => {
   it("filters by method prefix", () => {
     expect(find("del pet")).toEqual(["DELETE /pet/{petId}"]);
   });
+  it("matches words of the collection name", () => {
+    const inCollection = (q: string) => spec.endpoints.filter((e) => matchEndpoint(e, q, "Acme Shop")).map((e) => e.id);
+    expect(inCollection("acme del pet")).toEqual(["DELETE /pet/{petId}"]);
+    expect(inCollection("shop")).toHaveLength(spec.endpoints.length);
+    expect(find("acme")).toEqual([]);
+  });
   it("ranks path matches", () => {
     expect(find("inventory")[0]).toBe("GET /store/inventory");
     expect(find("getUserByName")[0]).toBe("GET /user/{username}");

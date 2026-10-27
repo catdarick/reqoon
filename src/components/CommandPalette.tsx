@@ -55,7 +55,7 @@ export default function CommandPalette() {
     }
     for (const c of collections) {
       for (const e of specs[c.id]?.endpoints ?? []) {
-        const m = matchEndpoint(e, q);
+        const m = matchEndpoint(e, q, c.name);
         // Hidden endpoints stay reachable from search, just ranked below visible ones.
         const h = isHidden(c.id, e.id);
         if (m) out.push({ collectionId: c.id, collectionName: c.name, endpoint: e, hits: m.pathHits, score: m.score - (h ? 1000 : 0), hidden: h });

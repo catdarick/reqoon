@@ -7,8 +7,9 @@ export interface Match {
 }
 
 /** Matches queries like "post pets", "/users/{id}", "getUser" or "del ord".
- *  A leading method token filters by HTTP method; remaining tokens fuzzy-match path/summary/operationId. */
-export function matchEndpoint(e: Endpoint, query: string): Match | null {
+ *  A leading method token filters by HTTP method; remaining tokens fuzzy-match path/summary/operationId.
+ *  Tokens may also match `collectionName`, so "stripe charges" narrows to one collection. */
+export function matchEndpoint(e: Endpoint, query: string, collectionName?: string): Match | null {
   const q = query.trim().toLowerCase();
   if (!q) return { score: 0, pathHits: [] };
   let tokens = q.split(/\s+/);
@@ -23,6 +24,7 @@ export function matchEndpoint(e: Endpoint, query: string): Match | null {
   }
   const path = e.path.toLowerCase();
   const hay = [path, (e.summary ?? "").toLowerCase(), (e.operationId ?? "").toLowerCase(), e.tags.join(" ").toLowerCase()];
+  const collection = (collectionName ?? "").toLowerCase();
   const pathHits: number[] = [];
   for (const t of tokens) {
     const idx = path.indexOf(t);
@@ -33,6 +35,10 @@ export function matchEndpoint(e: Endpoint, query: string): Match | null {
     }
     if (hay.slice(1).some((h) => h.includes(t))) {
       score += 12;
+      continue;
+    }
+    if (collection.includes(t)) {
+      score += 8;
       continue;
     }
     const fz = fuzzy(path, t);
