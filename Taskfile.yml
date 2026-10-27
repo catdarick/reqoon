@@ -1,0 +1,118 @@
+# https://taskfile.dev — run `task` to list the commands.
+version: "3"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+    silent: true
+
+  install:
+    desc: Install npm dependencies
+    cmds:
+      - npm install
+
+  dev:
+    desc: Run the desktop app with hot reload
+    cmds:
+      - npm run tauri dev
+
+  web:
+    desc: Run the UI only, in a browser (fetch/localStorage fallbacks)
+    cmds:
+      - npm run dev
+
+  test:
+    desc: Run unit tests
+    cmds:
+      - npm test
+
+  test:watch:
+    desc: Run unit tests in watch mode
+    cmds:
+      - npx vitest
+
+  check:
+    desc: Type-check the UI and the Rust side
+    cmds:
+      - npx tsc --noEmit
+      - cargo check --manifest-path src-tauri/Cargo.toml
+
+  ci:
+    desc: Everything CI checks before a release
+    cmds:
+      - task: check
+      - task: test
+
+  build:
+    desc: Build release bundles for this machine
+    cmds:
+      - npm run tauri build
+
+  build:universal:
+    desc: Build a universal macOS .dmg (Apple Silicon + Intel)
+    cmds:
+      - cd src-tauri && rustup target add aarch64-apple-darwin x86_64-apple-darwin
+      - npm run tauri build -- --target universal-apple-darwin
+
+  install:app:
+    desc: Build and copy Reqoon.app to /Applications (macOS)
+    platforms: [darwin]
+    cmds:
+      - npm run tauri build -- --bundles app
+      - rm -rf /Applications/Reqoon.app
+      - cp -R src-tauri/target/release/bundle/macos/Reqoon.app /Applications/
+      - echo "Installed /Applications/Reqoon.app"
+
+  icons:
+    desc: Regenerate app icons from app-icon.svg
+    cmds:
+      - npx tauri icon app-icon.svg
+
+  clean:
+    desc: Remove build output
+    cmds:
+      - rm -rf dist src-tauri/target
+
+  version:
+    desc: Print the current app version
+    cmds:
+      - node -p "require('./src-tauri/tauri.conf.json').version"
+    silent: true
+
+  release:
+    desc: "Bump the version, commit, tag and push to start a release (task release -- patch|minor|major|x.y.z)"
+    summary: |
+      Bumps the version in tauri.conf.json, package.json, package-lock.json,
+      Cargo.toml and Cargo.lock, runs the checks, commits "Release vX.Y.Z",
+      tags it and pushes the branch and the tag. The tag starts the GitHub
+      release workflow (.github/workflows/release.yml).
+
+        task release              # patch: 0.1.0 → 0.1.1
+        task release -- minor     # 0.1.0 → 0.2.0
+        task release -- 1.0.0
+    vars:
+      BUMP: '{{.CLI_ARGS | default "patch"}}'
+      BRANCH:
+        sh: git branch --show-current
+    preconditions:
+      - sh: test -z "$(git status --porcelain)"
+        msg: Commit or stash your changes first.
+      - sh: git remote get-url origin
+        msg: No "origin" remote to push to.
+      - sh: test -n "{{.BRANCH}}"
+        msg: Check out a branch first.
+    cmds:
+      # The release workflow commits the cask update back, so pick that up first.
+      - git pull --ff-only origin "{{.BRANCH}}"
+      - task: ci
+      - silent: true
+        cmd: |
+          set -e
+          version=$(node scripts/bump-version.mjs "{{.BUMP}}")
+          git add src-tauri/tauri.conf.json package.json package-lock.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+          git commit -m "Release v$version"
+          git tag -a "v$version" -m "Reqoon v$version"
+          git push origin "{{.BRANCH}}"
+          git push origin "v$version"
+          echo "Pushed v$version. Release build: $(git remote get-url origin | sed -E 's#(git@|https://)github.com[:/]#https://github.com/#; s#\.git$##')/actions"

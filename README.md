@@ -113,23 +113,29 @@ Because builds are unsigned, macOS may ask again for keychain access after an up
 
 ## Develop
 
+Common commands are in [`Taskfile.yml`](Taskfile.yml) ([Task](https://taskfile.dev), `brew install go-task`); run `task` to list them:
+
 ```bash
-npm install
-npm run tauri dev      # desktop app with hot reload
-npm run dev            # UI only in a browser (uses fetch/localStorage fallbacks)
-npm test               # unit tests for schema, diff, request building, search
-npm run tauri build    # release bundles for the current OS
+task install           # npm install
+task dev               # desktop app with hot reload
+task web               # UI only in a browser (uses fetch/localStorage fallbacks)
+task test              # unit tests for schema, diff, request building, search
+task check             # tsc + cargo check
+task build             # release bundles for the current OS
+task install:app       # build and copy Reqoon.app to /Applications
 ```
 
 Stack: Tauri 2 (Rust, reqwest) + React + TypeScript + CodeMirror 6. The Rust toolchain is pinned in `rust-toolchain.toml` (1.90); rustup installs it on first build.
 
 ### Release
 
-1. Bump the version in `src-tauri/tauri.conf.json`. Keep `package.json` and `src-tauri/Cargo.toml` in step.
-2. Commit, then tag and push:
-   ```bash
-   git tag v0.2.0 && git push && git push origin v0.2.0
-   ```
+```bash
+task release              # 0.1.0 → 0.1.1
+task release -- minor     # 0.1.0 → 0.2.0
+task release -- 1.0.0
+```
+
+This bumps the version in `tauri.conf.json`, `package.json`, `Cargo.toml` and both lockfiles. It then runs the checks, commits `Release vX.Y.Z`, tags the commit and pushes the branch and the tag. The working tree must be clean.
 
 [`release.yml`](.github/workflows/release.yml) runs the tests and builds the macOS universal `.dmg`, the Windows `.msi`/`.exe` and the Linux `.AppImage`/`.deb`. It publishes them as a GitHub release, then commits the new version and checksum to [`Casks/reqoon.rb`](Casks/reqoon.rb).
 
