@@ -65,9 +65,9 @@ tasks:
       - echo "Installed /Applications/Reqoon.app"
 
   icons:
-    desc: Regenerate app icons from app-icon.svg
+    desc: Regenerate app icons from src-tauri/app-icon.svg
     cmds:
-      - npx tauri icon app-icon.svg
+      - npx tauri icon src-tauri/app-icon.svg
 
   clean:
     desc: Remove build output
