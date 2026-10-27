@@ -88,6 +88,29 @@ Import an OpenAPI 3.0/3.1 spec and every endpoint becomes a ready-to-send reques
   </tr>
 </table>
 
+## Install
+
+Download the installer for your OS from [Releases](../../releases/latest).
+
+**macOS (Homebrew).** This is the easiest way, and updates come through `brew upgrade`:
+
+```bash
+brew tap catdarick/reqoon https://github.com/catdarick/reqoon
+brew install --cask reqoon
+```
+
+**macOS (manual).** Open `Reqoon_<version>_universal.dmg` and drag Reqoon to Applications. The app isn't notarized by Apple, so macOS will say it "is damaged" or "can't be opened" until you clear the quarantine flag once:
+
+```bash
+xattr -cr /Applications/Reqoon.app
+```
+
+**Windows.** Run the `.msi` or `-setup.exe`. SmartScreen warns about an unknown publisher: choose *More info → Run anyway*.
+
+**Linux.** Use the `.AppImage` (`chmod +x` it and run it) or install the `.deb`. Secrets are stored through the Secret Service (GNOME Keyring, KWallet).
+
+Because builds are unsigned, macOS may ask again for keychain access after an update. Choose *Always Allow*.
+
 ## Develop
 
 ```bash
@@ -99,6 +122,16 @@ npm run tauri build    # release bundles for the current OS
 ```
 
 Stack: Tauri 2 (Rust, reqwest) + React + TypeScript + CodeMirror 6. The Rust toolchain is pinned in `rust-toolchain.toml` (1.90); rustup installs it on first build.
+
+### Release
+
+1. Bump the version in `src-tauri/tauri.conf.json`. Keep `package.json` and `src-tauri/Cargo.toml` in step.
+2. Commit, then tag and push:
+   ```bash
+   git tag v0.2.0 && git push && git push origin v0.2.0
+   ```
+
+[`release.yml`](.github/workflows/release.yml) runs the tests and builds the macOS universal `.dmg`, the Windows `.msi`/`.exe` and the Linux `.AppImage`/`.deb`. It publishes them as a GitHub release, then commits the new version and checksum to [`Casks/reqoon.rb`](Casks/reqoon.rb).
 
 ### Layout
 
