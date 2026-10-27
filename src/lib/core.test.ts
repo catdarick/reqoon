@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSpec, getOperation, parseSpecText } from "./openapi";
+import { buildSpec, getOperation, parseSpecText, storedSpecText } from "./openapi";
 import { defaultValue, describeType, hasNullAlternative, matchVariant, normalize, switchVariant, validate, variantsOf } from "./schema";
 import { isBig, parseJson, stringifyJson } from "./json";
 import { cursorContext, locatePointers } from "./jsontext";
@@ -18,6 +18,13 @@ function state(p: Partial<RequestState> = {}): RequestState {
 }
 
 describe("openapi", () => {
+  it("stores YAML specs as JSON and keeps JSON as it is", () => {
+    const yaml = "openapi: 3.0.3\ninfo: {title: T, version: '1'}\npaths: {}\n";
+    const stored = storedSpecText(yaml, parseSpecText(yaml));
+    expect(JSON.parse(stored)).toEqual({ openapi: "3.0.3", info: { title: "T", version: "1" }, paths: {} });
+    const json = '  {"openapi": "3.1.0"}';
+    expect(storedSpecText(json, parseSpecText(json))).toBe(json);
+  });
   it("parses endpoints, tags and servers", () => {
     expect(spec.endpoints.length).toBe(12);
     expect(spec.tags.map((t) => t.name)).toEqual(["pet", "store", "user"]);

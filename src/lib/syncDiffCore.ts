@@ -12,7 +12,7 @@ export interface SyncDiffInput {
 }
 
 /** `doc` is the parsed new spec, reused when the update is applied. */
-export type SyncDiffResult = { diff: SpecDiff; doc: Json } | { error: string };
+export type SyncDiffResult = { diff: SpecDiff } | { error: string };
 
 export function computeSyncDiffSync({ oldText, newText, sourceUrl, saved }: SyncDiffInput): SyncDiffResult {
   let doc: Json;
@@ -23,7 +23,7 @@ export function computeSyncDiffSync({ oldText, newText, sourceUrl, saved }: Sync
   }
   try {
     const diff = diffSpecs(buildSpec(parseSpecText(oldText), sourceUrl), buildSpec(doc, sourceUrl), saved);
-    return { diff, doc };
+    return { diff };
   } catch (e) {
     return { error: String(e) };
   }

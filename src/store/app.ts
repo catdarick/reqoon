@@ -17,7 +17,7 @@ import {
   CustomAuth,
   uid,
 } from "../lib/models";
-import { buildSpec, getOperation, hashText, OperationInfo, parseSpecText, ParsedSpec } from "../lib/openapi";
+import { buildSpec, getOperation, hashText, OperationInfo, parseSpecText, ParsedSpec, storedSpecText } from "../lib/openapi";
 import * as platform from "../lib/platform";
 import { DEFAULT_SHORTCUTS } from "../lib/shortcuts";
 import { defaultValue, Json } from "../lib/schema";
@@ -156,7 +156,8 @@ export async function init() {
       delete (settings as { showDeprecated?: boolean }).showDeprecated;
       if (hideDeprecated) p.collections = (p.collections ?? []).map((c) => (c.hideRules === undefined ? { ...c, hideRules: "@deprecated" } : c));
       set({
-        collections: p.collections ?? [],
+        // A pending update joins once its text is loaded (loadPending), so it's never compared empty.
+        collections: (p.collections ?? []).map((c) => (c.pending ? { ...c, pending: undefined } : c)),
         environments: p.environments ?? [],
         activeEnvId: p.activeEnvId ?? null,
         requests: p.requests ?? {},
@@ -166,7 +167,7 @@ export async function init() {
         collapsed: p.collapsed ?? {},
         vault,
       });
-      await Promise.all((p.collections ?? []).map((c) => loadSpec(c.id)));
+      await Promise.all((p.collections ?? []).map((c) => Promise.all([loadSpec(c.id), loadPending(c)])));
     } else {
       set({ vault });
     }
@@ -186,11 +187,29 @@ async function loadSpec(id: string) {
   }
   try {
     const c = get().collections.find((x) => x.id === id);
-    const spec = buildSpec(parseSpecText(text), c?.source.kind === "url" ? c.source.location : undefined);
+    const doc = parseSpecText(text);
+    const spec = buildSpec(doc, c?.source.kind === "url" ? c.source.location : undefined);
     set((s) => ({ specs: { ...s.specs, [id]: spec } }));
+    // Specs saved by older versions as YAML are rewritten once, so later launches parse JSON.
+    const stored = storedSpecText(text, doc);
+    if (stored !== text) await platform.saveState(`spec_${id}`, stored);
   } catch (e) {
     set((s) => ({ specErrors: { ...s.specErrors, [id]: String(e) } }));
   }
+}
+
+/** Pending update texts are kept in their own files, not in state.json (which is rewritten on
+ *  every change and would carry megabytes of spec along). */
+const pendingFile = (id: string) => `spec_${id}_pending`;
+
+async function loadPending(c: Collection) {
+  if (!c.pending) return;
+  // Older versions kept the text inline in state.json.
+  const inline = c.pending.specText;
+  const specText = inline || (await platform.loadState(pendingFile(c.id)).catch(() => null));
+  if (inline) await platform.saveState(pendingFile(c.id), inline);
+  if (!specText) return;
+  set((s) => ({ collections: s.collections.map((x) => (x.id === c.id ? { ...x, pending: { ...c.pending!, specText } } : x)) }));
 }
 
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -253,7 +272,7 @@ function persistNow() {
   const s = get();
   const data: PersistedState = {
     v: STATE_VERSION,
-    collections: s.collections,
+    collections: s.collections.map((c) => (c.pending ? { ...c, pending: { ...c.pending, specText: "" } } : c)),
     // Secret values never touch the state file; they live in the keychain vault.
     environments: s.environments.map((e) => ({ ...e, vars: e.vars.map((v) => (v.secret ? { ...v, value: "", recent: undefined } : v)) })),
     activeEnvId: s.activeEnvId,
@@ -348,7 +367,8 @@ export async function loadSpecFromSource(source: CollectionSource, text?: string
 
 export async function importCollection(source: CollectionSource, text?: string): Promise<string> {
   const loaded = await loadSpecFromSource(source, text);
-  const spec = buildSpec(parseSpecText(loaded.text), source.kind === "url" ? source.location : undefined);
+  const doc = parseSpecText(loaded.text);
+  const spec = buildSpec(doc, source.kind === "url" ? source.location : undefined);
   const id = uid();
   const now = Date.now();
   const collection: Collection = {
@@ -364,7 +384,7 @@ export async function importCollection(source: CollectionSource, text?: string):
     baseUrl: spec.servers[0]?.url ?? "",
     monitor: source.kind !== "paste",
   };
-  await platform.saveState(`spec_${id}`, loaded.text);
+  await platform.saveState(`spec_${id}`, storedSpecText(loaded.text, doc));
   set((s) => ({ collections: [...s.collections, collection], specs: { ...s.specs, [id]: spec } }));
   if (spec.endpoints[0]) openEndpoint(id, spec.endpoints[0].id);
   return id;
@@ -375,6 +395,8 @@ export function updateCollection(id: string, patch: Partial<Collection>) {
 }
 
 export function removeCollection(id: string) {
+  // The spec files can be megabytes; there is no delete command, so they are emptied.
+  for (const f of [`spec_${id}`, `spec_${id}_prev`, pendingFile(id)]) void platform.saveState(f, "").catch(() => undefined);
   set((s) => {
     const requests = Object.fromEntries(Object.entries(s.requests).filter(([k]) => !k.startsWith(`${id}::`)));
     const tabs = s.tabs.filter((t) => !t.startsWith(`${id}::`));
@@ -851,13 +873,18 @@ export async function checkForUpdates(id: string, opts: { manual?: boolean } = {
     const hash = hashText(loaded.text);
     const patch: Partial<Collection> = { checkedAt: Date.now(), checkError: undefined, fileModifiedMs: loaded.modifiedMs ?? c.fileModifiedMs };
     if (hash !== c.hash && hash !== c.dismissedHash && hash !== c.pending?.hash) {
+      let specText: string;
       try {
-        buildSpec(parseSpecText(loaded.text));
+        const doc = parseSpecText(loaded.text);
+        buildSpec(doc);
+        // Parsed once here; the review and the sync then work from JSON.
+        specText = storedSpecText(loaded.text, doc);
       } catch (e) {
         updateCollection(id, { ...patch, checkError: `Updated spec is invalid: ${e}` });
         return;
       }
-      patch.pending = { specText: loaded.text, hash, detectedAt: Date.now() };
+      await platform.saveState(pendingFile(id), specText);
+      patch.pending = { specText, hash, detectedAt: Date.now() };
       toast("info", `“${c.name}” has spec changes to review`);
     } else if (hash === c.hash && c.pending) {
       patch.pending = undefined;
@@ -933,6 +960,10 @@ useApp.subscribe((s, prev) => {
     if (!c.pending) pendingDiffs.delete(c.id);
     else if (pendingDiffs.get(c.id)?.key !== `${c.hash}|${c.pending.hash}`) pendingDiff(c.id);
   }
+  // Applied, dismissed or gone: drop its text from disk too.
+  for (const c of prev.collections) {
+    if (c.pending && !s.collections.find((x) => x.id === c.id)?.pending) void platform.saveState(pendingFile(c.id), "").catch(() => undefined);
+  }
 });
 
 /** Applies a pending update. Request data is never deleted: values for removed endpoints or
@@ -941,10 +972,7 @@ export async function applySync(id: string) {
   const c = get().collections.find((x) => x.id === id);
   const oldSpec = get().specs[id];
   if (!c?.pending) return;
-  // Reuse the document parsed for the review when it's for this exact update.
-  const cached = pendingDiffs.get(id);
-  const parsed = cached?.key === `${c.hash}|${c.pending.hash}` && cached.result && "doc" in cached.result ? cached.result.doc : null;
-  const newSpec = buildSpec(parsed ?? parseSpecText(c.pending.specText), c.source.kind === "url" ? c.source.location : undefined);
+  const newSpec = buildSpec(parseSpecText(c.pending.specText), c.source.kind === "url" ? c.source.location : undefined);
   const prevText = await platform.loadState(`spec_${id}`);
   if (prevText != null) await platform.saveState(`spec_${id}_prev`, prevText);
   await platform.saveState(`spec_${id}`, c.pending.specText);
@@ -1004,8 +1032,9 @@ export async function revertSync(id: string) {
   const prevText = await platform.loadState(`spec_${id}_prev`);
   if (!c?.previous || prevText == null) return;
   const curText = await platform.loadState(`spec_${id}`);
-  const spec = buildSpec(parseSpecText(prevText), c.source.kind === "url" ? c.source.location : undefined);
-  await platform.saveState(`spec_${id}`, prevText);
+  const doc = parseSpecText(prevText);
+  const spec = buildSpec(doc, c.source.kind === "url" ? c.source.location : undefined);
+  await platform.saveState(`spec_${id}`, storedSpecText(prevText, doc));
   set((s) => ({ specs: { ...s.specs, [id]: spec }, specErrors: { ...s.specErrors, [id]: "" } }));
   const restored = new Set(spec.endpoints.map((e) => e.id));
   updateCollection(id, {

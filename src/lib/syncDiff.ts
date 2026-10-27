@@ -16,6 +16,11 @@ function getWorker(): Worker | null {
     worker.onmessage = (e: MessageEvent<{ id: number; result: SyncDiffResult }>) => {
       waiting.get(e.data.id)?.(e.data.result);
       waiting.delete(e.data.id);
+      // Its heap still holds both parsed specs; a new worker starts in milliseconds.
+      if (!waiting.size) {
+        worker?.terminate();
+        worker = undefined;
+      }
     };
     worker.onerror = () => {
       // Fail the requests in flight; later ones run inline.

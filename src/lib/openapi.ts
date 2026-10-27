@@ -75,6 +75,13 @@ export function parseSpecText(text: string): Json {
   return YAML.parse(text, { maxAliasCount: 10000, merge: true });
 }
 
+/** What to keep on disk for a spec read from `text`. YAML is stored as JSON: parsing a large YAML
+ *  document needs several times more memory than the result (Stripe's 7 MB spec peaks at 250+ MB)
+ *  and takes seconds, while JSON.parse is fast and lean. */
+export function storedSpecText(text: string, doc: Json): string {
+  return text.trimStart().startsWith("{") ? text : JSON.stringify(doc);
+}
+
 export function buildSpec(doc: Json, sourceUrl?: string): ParsedSpec {
   if (!doc || typeof doc !== "object") throw new Error("The document is not a valid OpenAPI object.");
   if (doc.swagger) throw new Error("Swagger 2.0 is not supported. Please convert the spec to OpenAPI 3.x.");
