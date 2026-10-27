@@ -17,6 +17,7 @@ import {
   CustomAuth,
   uid,
 } from "../lib/models";
+import { bundleRefs, hasExternalRefs } from "../lib/bundle";
 import { buildSpec, getOperation, hashText, OperationInfo, parseSpecText, ParsedSpec, storedSpecText } from "../lib/openapi";
 import * as platform from "../lib/platform";
 import { DEFAULT_SHORTCUTS } from "../lib/shortcuts";
@@ -355,20 +356,45 @@ export function reveal(keys: string[]) {
 // ---------------------------------------------------------------------------------------------
 // Collections
 
-export async function loadSpecFromSource(source: CollectionSource, text?: string): Promise<{ text: string; modifiedMs?: number }> {
+export async function loadSpecFromSource(
+  source: CollectionSource,
+  text?: string,
+): Promise<{ text: string; modifiedMs?: number; refFilesModifiedMs?: Record<string, number> }> {
   if (text !== undefined) return { text };
-  if (source.kind === "url") return { text: await platform.fetchText(source.location!) };
+  if (source.kind === "url") return { text: await withReferencedFiles(await platform.fetchText(source.location!), source.location!, platform.fetchText) };
   if (source.kind === "file") {
     const f = await platform.readTextFile(source.location!);
-    return { text: f.content, modifiedMs: f.modifiedMs };
+    const refFilesModifiedMs: Record<string, number> = {};
+    const read = async (path: string) => {
+      const r = await platform.readTextFile(path);
+      refFilesModifiedMs[path] = r.modifiedMs;
+      return r.content;
+    };
+    const text = await withReferencedFiles(f.content, source.location!, read);
+    return { text, modifiedMs: f.modifiedMs, refFilesModifiedMs: Object.keys(refFilesModifiedMs).length ? refFilesModifiedMs : undefined };
   }
   throw new Error("Nothing to import");
+}
+
+/** A spec split across files, as one JSON document; other specs as they are. */
+async function withReferencedFiles(text: string, location: string, load: (location: string) => Promise<string>): Promise<string> {
+  // Parsing a large YAML spec takes seconds, so specs whose refs all start with "#" skip it.
+  if (!/["']?\$ref["']?\s*:(?![\s"']*#)/.test(text)) return text;
+  let doc: Json;
+  try {
+    doc = parseSpecText(text);
+  } catch {
+    return text; // Reported by the caller, which parses it again.
+  }
+  const bundled = await bundleRefs(doc, location, load);
+  return bundled === doc ? text : JSON.stringify(bundled);
 }
 
 export async function importCollection(source: CollectionSource, text?: string): Promise<string> {
   const loaded = await loadSpecFromSource(source, text);
   const doc = parseSpecText(loaded.text);
   const spec = buildSpec(doc, source.kind === "url" ? source.location : undefined);
+  if (hasExternalRefs(doc)) throw new Error("The spec references other files. Import it from its URL or file, so they can be loaded next to it.");
   const id = uid();
   const now = Date.now();
   const collection: Collection = {
@@ -381,6 +407,7 @@ export async function importCollection(source: CollectionSource, text?: string):
     syncedAt: now,
     checkedAt: now,
     fileModifiedMs: loaded.modifiedMs,
+    refFilesModifiedMs: loaded.refFilesModifiedMs,
     baseUrl: spec.servers[0]?.url ?? "",
     monitor: source.kind !== "paste",
   };
@@ -866,12 +893,14 @@ export async function checkForUpdates(id: string, opts: { manual?: boolean } = {
   checking.add(id);
   try {
     if (c.source.kind === "file" && !opts.manual) {
-      const m = await platform.fileModified(c.source.location!);
-      if (m === c.fileModifiedMs) return;
+      const refs = Object.entries(c.refFilesModifiedMs ?? {});
+      const m = await platform.filesModified([c.source.location!, ...refs.map(([path]) => path)]);
+      if (m[0] === c.fileModifiedMs && refs.every(([, ms], i) => m[i + 1] === ms)) return;
     }
     const loaded = await loadSpecFromSource(c.source);
     const hash = hashText(loaded.text);
     const patch: Partial<Collection> = { checkedAt: Date.now(), checkError: undefined, fileModifiedMs: loaded.modifiedMs ?? c.fileModifiedMs };
+    if (c.source.kind === "file") patch.refFilesModifiedMs = loaded.refFilesModifiedMs;
     if (hash !== c.hash && hash !== c.dismissedHash && hash !== c.pending?.hash) {
       let specText: string;
       try {

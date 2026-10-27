@@ -18,7 +18,7 @@ Import an OpenAPI 3.0/3.1 spec and every endpoint becomes a ready-to-send reques
 ## Features
 
 **Requests from the spec**
-- Collections are imported from a URL, a file or pasted text (JSON or YAML) and grouped by tag or path.
+- Collections are imported from a URL, a file or pasted text (JSON or YAML) and grouped by tag or path. Specs split across files are loaded with every file they reference.
 - Path, query and header parameters get typed inputs; optional ones can be switched on one at a time.
 - Request bodies are edited as a schema-generated form, or as Raw JSON with schema-aware autocompletion, lint and examples. Both views edit the same body.
 - Descriptions from the spec (Markdown or HTML) are rendered next to the fields they describe.
@@ -143,7 +143,7 @@ This bumps the version in `tauri.conf.json`, `package.json`, `Cargo.toml` and bo
 ### Layout
 
 - `src-tauri/src/lib.rs`: HTTP execution (reqwest, cancellable), file reads for spec watching, atomic state persistence in the app data dir, and OS keychain access.
-- `src/lib/`: OpenAPI parsing and `$ref`/`allOf` resolution (`openapi.ts`, `schema.ts`), request building and auth (`request.ts`), variables (`vars.ts`), spec diffing (`diff.ts`, `syncDiff.ts`), raw-JSON cursor context (`jsontext.ts`), search and shortcuts.
+- `src/lib/`: OpenAPI parsing and `$ref`/`allOf` resolution (`openapi.ts`, `schema.ts`), bundling of multi-file specs (`bundle.ts`), request building and auth (`request.ts`), variables (`vars.ts`), spec diffing (`diff.ts`, `syncDiff.ts`), raw-JSON cursor context (`jsontext.ts`), search and shortcuts.
 - `src/store/`: app state, persistence, environments and secrets, monitoring and sync (`app.ts`), and request history (`history.ts`).
 - `src/components/`: UI. `SchemaForm.tsx` is the generated form, and `JsonEditor.tsx` is the raw editor with completion and lint.
 

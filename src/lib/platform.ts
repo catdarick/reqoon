@@ -81,8 +81,9 @@ export async function readTextFile(path: string): Promise<{ content: string; mod
   return invoke("read_text_file", { path });
 }
 
-export async function fileModified(path: string): Promise<number> {
-  return invoke("file_modified", { path });
+/** Modification times of `paths`, 0 for a file that can't be read. */
+export async function filesModified(paths: string[]): Promise<number[]> {
+  return invoke("files_modified", { paths });
 }
 
 export async function pickSpecFile(): Promise<string | null> {

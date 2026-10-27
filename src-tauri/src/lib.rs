@@ -175,15 +175,20 @@ fn read_text_file(path: String) -> Result<FileContent, String> {
     Ok(FileContent { content, modified_ms })
 }
 
+/// Modification times of several files in one call; 0 for a file that can't be read.
 #[tauri::command]
-fn file_modified(path: String) -> Result<u64, String> {
-    let meta = std::fs::metadata(&path).map_err(|e| e.to_string())?;
-    Ok(meta
-        .modified()
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(0))
+fn files_modified(paths: Vec<String>) -> Vec<u64> {
+    paths
+        .iter()
+        .map(|p| {
+            std::fs::metadata(p)
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as u64)
+                .unwrap_or(0)
+        })
+        .collect()
 }
 
 fn state_path(app: &AppHandle, name: &str) -> Result<PathBuf, String> {
@@ -248,7 +253,7 @@ pub fn run() {
             send_request,
             cancel_request,
             read_text_file,
-            file_modified,
+            files_modified,
             load_state,
             save_state,
             secret_get,

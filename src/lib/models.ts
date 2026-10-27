@@ -29,6 +29,8 @@ export interface Collection {
   syncedAt: number;
   checkedAt?: number;
   fileModifiedMs?: number;
+  /** Files a split spec references, with their modification times, so edits to them are noticed. */
+  refFilesModifiedMs?: Record<string, number>;
   baseUrl: string; // may contain {{vars}}
   monitor: boolean;
   /** How the sidebar groups this collection's endpoints; falls back to the app default. */
