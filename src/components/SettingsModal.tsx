@@ -77,24 +77,25 @@ function General() {
         </div>
       </div>
       <div className="form-row">
-        <label>Sidebar</label>
-        <div className="col" style={{ gap: 6 }}>
-          <label className="row">
-            <span className="grow">Default grouping</span>
-            <select
-              className="select"
-              style={{ width: 170 }}
-              value={s.defaultGroupMode}
-              onChange={(e) => updateSettings({ defaultGroupMode: e.target.value as GroupMode })}
-            >
-              {GROUP_MODES.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="form-hint" style={{ marginTop: -2 }}>Each collection can override this from its menu in the sidebar.</div>
+        <label>Default grouping</label>
+        <select
+          className="select"
+          style={{ width: 170 }}
+          value={s.defaultGroupMode}
+          onChange={(e) => updateSettings({ defaultGroupMode: e.target.value as GroupMode })}
+        >
+          {GROUP_MODES.map((m) => (
+            <option key={m.id} value={m.id}>
+              {m.label}
+            </option>
+          ))}
+        </select>
+      </div>
+      {/* Hints for the sidebar, under its control. */}
+      <div className="form-row" style={{ marginTop: -6 }}>
+        <span />
+        <div className="col" style={{ gap: 4 }}>
+          <div className="form-hint" style={{ marginTop: 0 }}>Each collection can override this from its menu in the sidebar.</div>
           <div className="form-hint" style={{ marginTop: 0 }}>
             To hide deprecated or unused endpoints, right-click them in the sidebar or edit a collection's hide rules.
           </div>
