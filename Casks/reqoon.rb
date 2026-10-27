@@ -1,7 +1,7 @@
 # Updated by .github/workflows/release.yml on every release.
 cask "reqoon" do
-  version "0.1.2"
-  sha256 "78cd3090e47935ab5e79b8de9d987902c1abe128457c59712a3d5087c511f90d"
+  version "0.1.3"
+  sha256 "2289b2e3a270078cefc96b14a853c9da91edd4bc1cb41f3daf7509539eba4a2a"
 
   url "https://github.com/catdarick/reqoon/releases/download/v#{version}/Reqoon_#{version}_universal.dmg"
   name "Reqoon"
