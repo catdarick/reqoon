@@ -39,7 +39,7 @@ Import an OpenAPI 3.0/3.1 spec and every endpoint becomes a ready-to-send reques
 - Fuzzy endpoint search across all collections (<kbd>⌘E</kbd>). Start the query with a method to filter, e.g. "del order".
 - Request history (<kbd>⌘Y</kbd>) stores each request with its response. Any entry reopens in a tab and can be sent again. Credentials are masked in history.
 - Tabs can be reordered, duplicated and renamed, and closed tabs can be reopened.
-- Responses can be viewed pretty-printed with folding, raw, or as headers. You can search within a response and copy a request as cURL.
+- Responses (JSON or XML) can be viewed pretty-printed with folding, raw, or as headers. Bodies of tens of megabytes are shown in full and searched as a whole. You can copy a request as cURL.
 - Shortcuts are configurable. Light and dark themes follow the system.
 
 ## Screenshots

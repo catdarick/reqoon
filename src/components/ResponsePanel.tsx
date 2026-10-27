@@ -1,13 +1,51 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { updateSettings, useApp } from "../store/app";
 import JsonTree from "./JsonTree";
+import TextView, { Highlight } from "./TextView";
 import { parseJson, stringifyJson } from "../lib/json";
+import { Json } from "../lib/schema";
 import { Close, Copy, Down, Search, Up } from "./Icons";
 import { formatCombo } from "../lib/shortcuts";
+import { FormatKind, FormattedText, formatText, isXmlResponse } from "../lib/format";
+import { formatAsync, WORKER_FROM } from "../lib/formatAsync";
 
 type View = "pretty" | "raw" | "headers";
 
 export const FIND_EVENT = "reqoon:find-in-response";
+
+/** JSON up to this size is shown as a tree; larger JSON as formatted text, whose find stays fast. */
+const TREE_MAX = 2_000_000;
+/** Find waits for typing to pause on bodies this large. */
+const DEBOUNCE_FROM = 1_000_000;
+
+/** The Pretty view of a body: a JSON tree, formatted text, or null for the body as is. */
+type Pretty = { tree: Json } | { formatted: FormattedText; highlight: Highlight } | null;
+
+/** Pretty views per response, so switching views doesn't parse or reformat a large body again.
+ *  A promise while a large body is being formatted in the worker. */
+const prettyCache = new WeakMap<object, Pretty | Promise<void>>();
+
+function prettyOf(res: object, body: string, contentType: string): Pretty | Promise<void> {
+  const cached = prettyCache.get(res);
+  if (cached !== undefined) return cached;
+  const json = /json/i.test(contentType) || /^\s*[[{]/.test(body.slice(0, 256));
+  const kind: FormatKind | null = json ? "json" : isXmlResponse(contentType, body) ? "xml" : null;
+  let pretty: Pretty | Promise<void> = null;
+  if (json && body.length <= TREE_MAX) {
+    try {
+      pretty = { tree: parseJson(body) };
+    } catch {
+      pretty = null;
+    }
+  } else if (kind && body.length < WORKER_FROM) {
+    const formatted = formatText(kind, body);
+    pretty = formatted && { formatted, highlight: kind };
+  } else if (kind) {
+    pretty = formatAsync(kind, body).then((formatted) => void prettyCache.set(res, formatted && { formatted, highlight: kind }));
+  }
+  prettyCache.set(res, pretty);
+  return pretty;
+}
 
 export default function ResponsePanel({ tabKey }: { tabKey: string }) {
   const res = useApp((s) => s.responses[tabKey]);
@@ -30,17 +68,32 @@ export default function ResponsePanel({ tabKey }: { tabKey: string }) {
     return () => window.removeEventListener(FIND_EVENT, open);
   }, []);
 
-  const parsed = useMemo(() => {
-    if (!res || "error" in res) return undefined;
-    const ct = res.headers.find(([k]) => k.toLowerCase() === "content-type")?.[1] ?? "";
-    const t = res.body.trimStart();
-    if (!/json/i.test(ct) && !(t.startsWith("{") || t.startsWith("["))) return undefined;
-    try {
-      return { value: parseJson(res.body) };
-    } catch {
-      return undefined;
-    }
-  }, [res]);
+  const body = res && !("error" in res) ? res.body : "";
+  const contentType = res && !("error" in res) ? (res.headers.find(([k]) => k.toLowerCase() === "content-type")?.[1] ?? "") : "";
+  // Parsed or formatted only when the Pretty view is shown.
+  const [formatted, rerender] = useReducer((n: number) => n + 1, 0);
+  const pretty = useMemo(
+    () => (!res || "error" in res || view !== "pretty" ? null : prettyOf(res, res.body, contentType)),
+    [res, view, contentType, formatted],
+  );
+  const formatting = pretty instanceof Promise;
+  useEffect(() => {
+    if (!(pretty instanceof Promise)) return;
+    let live = true;
+    pretty.then(() => live && rerender());
+    return () => {
+      live = false;
+    };
+  }, [pretty]);
+
+  const typed = find?.q ?? "";
+  const [query, setQuery] = useState(typed);
+  const delay = body.length >= DEBOUNCE_FROM ? 150 : 0;
+  useEffect(() => {
+    if (!delay) return setQuery(typed);
+    const t = setTimeout(() => setQuery(typed), delay);
+    return () => clearTimeout(t);
+  }, [typed, delay]);
 
   if (!res) {
     return (
@@ -78,7 +131,10 @@ export default function ResponsePanel({ tabKey }: { tabKey: string }) {
   }
 
   const sc = Math.floor(res.status / 100);
-  const copy = () => navigator.clipboard.writeText(parsed && view === "pretty" ? stringifyJson(parsed.value, 2) : res.body);
+  const copy = () =>
+    navigator.clipboard.writeText(
+      view !== "pretty" || !pretty || formatting ? res.body : "tree" in pretty ? stringifyJson(pretty.tree, 2) : pretty.formatted.text,
+    );
 
   return (
     <section className="pane" aria-label="Response">
@@ -137,7 +193,7 @@ export default function ResponsePanel({ tabKey }: { tabKey: string }) {
               }
             }}
           />
-          <span className="small muted find-count">{find.q ? (count ? `${(((find.cur % count) + count) % count) + 1} / ${count}${count >= 5000 ? "+" : ""}` : "No results") : ""}</span>
+          <span className="small muted find-count">{find.q ? (count ? `${(((find.cur % count) + count) % count) + 1} / ${count}` : "No results") : ""}</span>
           <button className="icon-btn sm" title="Previous (⇧↩)" disabled={!count} onClick={() => setFind({ ...find, cur: find.cur - 1 })}>
             <Up size={12} />
           </button>
@@ -149,7 +205,7 @@ export default function ResponsePanel({ tabKey }: { tabKey: string }) {
           </button>
         </div>
       )}
-      <div className="resp-body selectable">
+      <div className={`resp-body selectable ${view === "headers" || (view === "pretty" && (formatting || (pretty && "tree" in pretty))) || !body ? "" : "flush"}`}>
         {view === "headers" ? (
           <table className="headers-table">
             <tbody>
@@ -161,65 +217,41 @@ export default function ResponsePanel({ tabKey }: { tabKey: string }) {
               ))}
             </tbody>
           </table>
-        ) : view === "pretty" && parsed ? (
-          <JsonTree key={res.at} value={parsed.value} query={find?.q ?? ""} current={find?.cur ?? 0} onMatches={onMatches} />
+        ) : !body ? (
+          <pre className="pre">
+            <span className="muted">(empty body)</span>
+          </pre>
+        ) : view === "pretty" && formatting ? (
+          <div className="row muted small">
+            <span className="spin" style={{ color: "var(--accent)" }} />
+            Formatting {formatSize(res.size)}…
+          </div>
+        ) : view === "pretty" && pretty && "tree" in pretty ? (
+          <JsonTree key={res.at} value={pretty.tree} query={query} current={find?.cur ?? 0} onMatches={onMatches} />
+        ) : view === "pretty" && pretty && "formatted" in pretty ? (
+          <TextView
+            key="pretty"
+            text={pretty.formatted.text}
+            folds={pretty.formatted.folds}
+            highlight={pretty.highlight}
+            wrap
+            query={query}
+            current={find?.cur ?? 0}
+            onMatches={onMatches}
+          />
         ) : (
           <>
             {view === "raw" && (
-              <label className="row small muted" style={{ marginBottom: 8 }}>
+              <label className="row small muted resp-wrap">
                 <input type="checkbox" className="checkbox" checked={wrap} onChange={(e) => updateSettings({ wrapResponse: e.target.checked })} />
                 Wrap lines
               </label>
             )}
-            <RawBody
-              text={res.body.length > 2_000_000 ? res.body.slice(0, 2_000_000) + "\n… (truncated)" : res.body}
-              wrap={wrap || view === "pretty"}
-              query={find?.q ?? ""}
-              current={find?.cur ?? 0}
-              onMatches={onMatches}
-            />
+            <TextView key="raw" text={body} wrap={wrap || view === "pretty"} query={query} current={find?.cur ?? 0} onMatches={onMatches} />
           </>
         )}
       </div>
     </section>
-  );
-}
-
-const MAX_RAW_MARKS = 5000;
-
-function RawBody({ text, wrap, query, current, onMatches }: { text: string; wrap: boolean; query: string; current: number; onMatches: (n: number) => void }) {
-  const box = useRef<HTMLPreElement>(null);
-  const hits = useMemo(() => {
-    if (!query) return [];
-    const out: number[] = [];
-    const lower = text.toLowerCase();
-    const needle = query.toLowerCase();
-    for (let i = lower.indexOf(needle); i >= 0 && out.length < MAX_RAW_MARKS; i = lower.indexOf(needle, i + needle.length)) out.push(i);
-    return out;
-  }, [text, query]);
-  useEffect(() => onMatches(hits.length), [hits, onMatches]);
-  const cur = hits.length ? ((current % hits.length) + hits.length) % hits.length : -1;
-  useEffect(() => {
-    box.current?.querySelector(".jt-hit.cur")?.scrollIntoView({ block: "nearest" });
-  }, [cur, hits]);
-  if (!text) return <pre className="pre"><span className="muted">(empty body)</span></pre>;
-  if (!hits.length) return <pre className={`pre ${wrap ? "wrap" : ""}`}>{text}</pre>;
-  const parts: React.ReactNode[] = [];
-  let at = 0;
-  hits.forEach((h, i) => {
-    if (h > at) parts.push(text.slice(at, h));
-    parts.push(
-      <mark key={h} className={`jt-hit ${i === cur ? "cur" : ""}`}>
-        {text.slice(h, h + query.length)}
-      </mark>,
-    );
-    at = h + query.length;
-  });
-  parts.push(text.slice(at));
-  return (
-    <pre ref={box} className={`pre ${wrap ? "wrap" : ""}`}>
-      {parts}
-    </pre>
   );
 }
 

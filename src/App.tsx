@@ -108,8 +108,8 @@ function useShortcuts() {
       if (!action) return;
       // A binding saved without a real modifier must not eat typing in text fields.
       if (needsModifier(c) && (e.target as HTMLElement)?.closest?.("input, textarea, [contenteditable=true], .cm-editor")) return;
-      // Text editors keep their own find (CodeMirror's search panel).
-      if (action === "findInResponse" && (e.target as HTMLElement)?.closest?.(".cm-editor")) return;
+      // Text editors keep their own find (CodeMirror's search panel); the response view uses ours.
+      if (action === "findInResponse" && (e.target as HTMLElement)?.closest?.(".cm-editor") && !(e.target as HTMLElement).closest(".resp-view")) return;
       e.preventDefault();
       e.stopPropagation();
       const tab = s.activeTab;

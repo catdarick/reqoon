@@ -4,7 +4,6 @@ import { isBig, stringifyJson } from "../lib/json";
 import { Check, Copy } from "./Icons";
 
 const PAGE = 200;
-const MAX_MATCHES = 5000;
 
 // The tree is rendered as a flat list of rows so that copying a selection and searching can
 // work on the whole document, including collapsed nodes and unrendered pages.
@@ -92,10 +91,9 @@ function findMatches(root: Json, q: string): JsonMatch[] {
   const needle = q.toLowerCase();
   const scan = (text: string, path: Seg, line: JsonMatch["line"]) => {
     const lower = text.toLowerCase();
-    for (let i = lower.indexOf(needle); i >= 0 && out.length < MAX_MATCHES; i = lower.indexOf(needle, i + needle.length)) out.push({ path, line, at: i });
+    for (let i = lower.indexOf(needle); i >= 0; i = lower.indexOf(needle, i + needle.length)) out.push({ path, line, at: i });
   };
   const walk = (v: Json, path: Seg, name: string | number | undefined, last: boolean) => {
-    if (out.length >= MAX_MATCHES) return;
     const comma = last ? "" : ",";
     if (!isContainer(v)) return scan(`${keyPart(name)}${primText(v)}${comma}`, path, "node");
     const arr = Array.isArray(v);
