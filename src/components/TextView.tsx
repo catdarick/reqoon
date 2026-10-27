@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { Decoration, DecorationSet, EditorView, lineNumbers, ViewPlugin, ViewUpdate } from "@codemirror/view";
-import { EditorState, Extension, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
-import { codeFolding, foldedRanges, foldGutter, foldService, unfoldEffect } from "@codemirror/language";
+import { Annotation, EditorState, Extension, RangeSetBuilder, StateEffect, StateField } from "@codemirror/state";
+import { codeFolding, foldable, foldedRanges, foldEffect, foldGutter, foldService, unfoldAll, unfoldEffect } from "@codemirror/language";
 import { findAll, firstAtOrAfter, Hits, NO_HITS } from "../lib/textSearch";
 import {
   columnLayout,
@@ -18,11 +18,19 @@ import {
 
 export type Highlight = "xml" | "json";
 
+/** "Collapse all" / "Expand all" from the response toolbar; `seq` makes each click a new request. */
+export interface FoldRequest {
+  collapse: boolean;
+  seq: number;
+}
+
 /** What the editor extensions read; replaced when the layout is rebuilt for a new width. */
 interface Ctx {
   text: string;
   layout: Layout;
   cols: number;
+  /** After "Collapse all": opening a fold folds the children inside it, as the JSON tree does. */
+  collapsed: boolean;
 }
 
 /** Read-only view of response text of any size. CodeMirror renders only the visible lines; long
@@ -33,6 +41,7 @@ export default function TextView({
   wrap,
   folds,
   highlight,
+  fold,
   query,
   current,
   onMatches,
@@ -42,6 +51,7 @@ export default function TextView({
   /** Fold pairs from formatting: closing line per opening line (see FormattedText). */
   folds?: Int32Array;
   highlight?: Highlight;
+  fold?: FoldRequest;
   query: string;
   current: number;
   onMatches: (n: number) => void;
@@ -52,7 +62,7 @@ export default function TextView({
   const byColumn = useMemo(() => wrap && maxLineLength(text) > LONG_LINE, [text, wrap]);
 
   useEffect(() => {
-    const c: Ctx = { text, layout: identityLayout(text), cols: 0 };
+    const c: Ctx = { text, layout: identityLayout(text), cols: 0, collapsed: false };
     if (byColumn) {
       // A first guess from the pane width; corrected once the font is measured below.
       c.cols = Math.max(20, Math.floor((host.current!.clientWidth - 60) / 7.2));
@@ -88,6 +98,17 @@ export default function TextView({
       exts.push(
         codeFolding({ placeholderText: "…" }),
         foldGutter(),
+        // Folding is lazy: rather than folding every level up front (slow on large bodies),
+        // each unfold folds the next level, except the branch leading to a find match.
+        EditorState.transactionExtender.of((tr) => {
+          if (!c.collapsed) return null;
+          const keep = tr.annotation(revealAt);
+          const effects = new Map<string, StateEffect<unknown>>();
+          for (const e of tr.effects) {
+            if (e.is(unfoldEffect)) for (const f of childFolds(tr.startState, e.value, keep)) effects.set(`${f.from}:${f.to}`, foldEffect.of(f));
+          }
+          return effects.size ? { effects: [...effects.values()] } : null;
+        }),
         // Fold to `<a>…</a>` / `{…}`, using the line pairs found while formatting.
         foldService.of((state, from) => {
           const line = origLineOfRow(c.layout, state.doc.lineAt(from).number);
@@ -127,6 +148,17 @@ export default function TextView({
     };
   }, [text, wrap, byColumn, folds, highlight]);
 
+  useEffect(() => {
+    const v = view.current;
+    const c = ctx.current;
+    if (!v || !c || !fold) return;
+    c.collapsed = false;
+    unfoldAll(v);
+    if (fold.collapse) collapseAll(v, c);
+    // Only a new click applies; a rebuilt view starts unfolded.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fold]);
+
   const hits = useMemo(() => findAll(text, query), [text, query]);
   useEffect(() => onMatches(hits.n), [hits, onMatches]);
 
@@ -141,10 +173,45 @@ export default function TextView({
       foldedRanges(v.state).between(at, at + 1, (from, to) => void effects.push(unfoldEffect.of({ from, to })));
       effects.push(EditorView.scrollIntoView(at, { y: "center" }));
     }
-    v.dispatch({ effects });
+    v.dispatch({ effects, annotations: cur >= 0 ? revealAt.of(toDisplay(c.layout, hits.pos[cur])) : [] });
   }, [hits, current, text, wrap, byColumn, folds, highlight]);
 
   return <div className="resp-view" ref={host} />;
+}
+
+/** A find match being scrolled to: lazy folding leaves the branch that leads to it open. */
+const revealAt = Annotation.define<number>();
+
+/** Folds for the elements directly inside `range` (an open fold range). The child containing
+ *  `keep` isn't folded; its own children are, recursively, so `keep` stays visible. */
+function childFolds(state: EditorState, range: { from: number; to: number }, keep?: number): { from: number; to: number }[] {
+  const out: { from: number; to: number }[] = [];
+  for (let pos = state.doc.lineAt(range.from).to + 1; pos < range.to; ) {
+    const line = state.doc.lineAt(pos);
+    const child = foldable(state, line.from, line.to);
+    if (child) {
+      if (keep !== undefined && keep >= line.from && keep <= child.to) out.push(...childFolds(state, child, keep));
+      else out.push(child);
+    }
+    pos = (child ? state.doc.lineAt(child.to) : line).to + 1;
+  }
+  return out;
+}
+
+/** Leaves the outermost element or container open with its children folded. Deeper levels are
+ *  folded as they are opened (see the transaction extender). */
+function collapseAll(v: EditorView, c: Ctx) {
+  const { state } = v;
+  for (let pos = 0; pos < state.doc.length; ) {
+    const line = state.doc.lineAt(pos);
+    const root = foldable(state, line.from, line.to);
+    if (root) {
+      c.collapsed = true;
+      v.dispatch({ effects: unfoldEffect.of(root) });
+      return;
+    }
+    pos = line.to + 1;
+  }
 }
 
 /** Characters that fit in a row next to the gutter. */

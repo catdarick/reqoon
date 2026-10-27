@@ -2,8 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Json } from "../lib/schema";
 import { isBig, stringifyJson } from "../lib/json";
 import { Check, Copy } from "./Icons";
+import type { FoldRequest } from "./TextView";
 
 const PAGE = 200;
+/** Containers start expanded until the tree has this many rows; later ones start collapsed,
+ *  so a large response doesn't render tens of thousands of rows at once. "Collapse all" instead
+ *  keeps only the root open. */
+const AUTO_OPEN_ROWS = 5000;
 
 // The tree is rendered as a flat list of rows so that copying a selection and searching can
 // work on the whole document, including collapsed nodes and unrendered pages.
@@ -36,12 +41,6 @@ function isContainer(v: Json): v is Json[] | { [k: string]: Json } {
 
 function entriesOf(v: Json[] | { [k: string]: Json }): [string | number, Json][] {
   return Array.isArray(v) ? v.map((x, i) => [i, x]) : Object.entries(v);
-}
-
-function defaultOpen(v: Json, depth: number): boolean {
-  if (!isContainer(v)) return false;
-  const size = Array.isArray(v) ? v.length : Object.keys(v).length;
-  return depth < 3 && size < 500;
 }
 
 function keyPart(name: string | number | undefined): string {
@@ -118,14 +117,22 @@ export default function JsonTree({
   query = "",
   current = 0,
   onMatches,
+  fold,
 }: {
   value: Json;
   query?: string;
   current?: number;
   onMatches?: (n: number) => void;
+  fold?: FoldRequest;
 }) {
   // User choices override the default open state; keyed by path id.
   const [openState, setOpenState] = useState<Map<string, boolean>>(() => new Map());
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => {
+    if (!fold) return;
+    setOpenState(new Map());
+    setCollapsed(fold.collapse);
+  }, [fold]);
   const [limits, setLimits] = useState<Map<string, number>>(() => new Map());
   const box = useRef<HTMLDivElement>(null);
 
@@ -163,7 +170,7 @@ export default function JsonTree({
       const entries = entriesOf(v);
       if (!entries.length) return void out.push({ kind: "empty", path, depth, name, value: v, last, arr });
       const id = pathId(path);
-      const open = openState.get(id) ?? defaultOpen(v, depth);
+      const open = openState.get(id) ?? (collapsed ? depth === 0 : out.length < AUTO_OPEN_ROWS);
       if (!open) return void out.push({ kind: "collapsed", path, depth, name, value: v, last, arr });
       out.push({ kind: "open", path, depth, name, value: v, last, arr });
       const limit = limits.get(id) ?? PAGE;
@@ -173,7 +180,7 @@ export default function JsonTree({
     };
     walk(value, [], 0, undefined, true);
     return out;
-  }, [value, openState, limits]);
+  }, [value, openState, limits, collapsed]);
 
   const toggle = useCallback((r: Row) => {
     const id = pathId(r.path);

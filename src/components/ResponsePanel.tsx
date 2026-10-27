@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from "react";
 import { updateSettings, useApp } from "../store/app";
 import JsonTree from "./JsonTree";
-import TextView, { Highlight } from "./TextView";
+import TextView, { FoldRequest, Highlight } from "./TextView";
 import { parseJson, stringifyJson } from "../lib/json";
 import { Json } from "../lib/schema";
-import { Close, Copy, Down, Search, Up } from "./Icons";
+import { Close, CollapseAll, Copy, Down, ExpandAll, Search, Up } from "./Icons";
 import { formatCombo } from "../lib/shortcuts";
 import { FormatKind, FormattedText, formatText, isXmlResponse } from "../lib/format";
 import { formatAsync, WORKER_FROM } from "../lib/formatAsync";
@@ -86,6 +86,12 @@ export default function ResponsePanel({ tabKey }: { tabKey: string }) {
     };
   }, [pretty]);
 
+  // Collapse/expand all, kept with the response it was clicked for.
+  const [foldFor, setFoldFor] = useState<{ res: object; req: FoldRequest } | null>(null);
+  const fold = res && foldFor?.res === res ? foldFor.req : undefined;
+  const foldAll = (collapse: boolean) => res && setFoldFor({ res, req: { collapse, seq: (foldFor?.req.seq ?? 0) + 1 } });
+  const foldable = view === "pretty" && !!pretty && !formatting;
+
   const typed = find?.q ?? "";
   const [query, setQuery] = useState(typed);
   const delay = body.length >= DEBOUNCE_FROM ? 150 : 0;
@@ -150,6 +156,17 @@ export default function ResponsePanel({ tabKey }: { tabKey: string }) {
         </span>
         {loading && <span className="spin" style={{ color: "var(--accent)" }} />}
         <span className="spacer" />
+        {/* Left of the view switch, so the buttons that stay don't move when these hide. */}
+        {foldable && (
+          <>
+            <button className="icon-btn" title="Collapse all" onClick={() => foldAll(true)}>
+              <CollapseAll />
+            </button>
+            <button className="icon-btn" title="Expand all" onClick={() => foldAll(false)}>
+              <ExpandAll />
+            </button>
+          </>
+        )}
         <div className="seg">
           <button className={view === "pretty" ? "active" : ""} onClick={() => setView("pretty")}>
             Pretty
@@ -227,13 +244,14 @@ export default function ResponsePanel({ tabKey }: { tabKey: string }) {
             Formatting {formatSize(res.size)}…
           </div>
         ) : view === "pretty" && pretty && "tree" in pretty ? (
-          <JsonTree key={res.at} value={pretty.tree} query={query} current={find?.cur ?? 0} onMatches={onMatches} />
+          <JsonTree key={res.at} value={pretty.tree} query={query} current={find?.cur ?? 0} onMatches={onMatches} fold={fold} />
         ) : view === "pretty" && pretty && "formatted" in pretty ? (
           <TextView
             key="pretty"
             text={pretty.formatted.text}
             folds={pretty.formatted.folds}
             highlight={pretty.highlight}
+            fold={fold}
             wrap
             query={query}
             current={find?.cur ?? 0}
