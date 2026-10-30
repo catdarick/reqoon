@@ -1,6 +1,6 @@
 [package]
 name = "reqoon"
-version = "0.1.3"
+version = "0.1.4"
 description = "Schema-driven OpenAPI REST client"
 edition = "2021"
 
