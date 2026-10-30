@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildSpec, getOperation, parseSpecText, storedSpecText } from "./openapi";
+import type { Json } from "./schema";
 import { defaultValue, describeType, hasNullAlternative, matchVariant, normalize, switchVariant, validate, variantsOf } from "./schema";
 import { isBig, parseJson, stringifyJson } from "./json";
 import { cursorContext, locatePointers } from "./jsontext";
@@ -335,6 +336,27 @@ paths:
   it("reports nothing for identical specs", () => {
     const d = diffSpecs(spec, buildSpec(parseSpecText(SAMPLE_SPEC)), {});
     expect(d.added.length + d.removed.length + d.modified.length).toBe(0);
+  });
+  it("compares densely cross-referenced schemas without inlining them", () => {
+    // Every schema refers to every other one, like Stripe's: inlining refs would never finish.
+    const dense = (extra: Json) => {
+      const names = Array.from({ length: 12 }, (_, i) => `S${i}`);
+      const schemas = Object.fromEntries(
+        names.map((n) => [n, { type: "object", properties: Object.fromEntries(names.map((m) => [m.toLowerCase(), { $ref: `#/components/schemas/${m}` }])) }]),
+      );
+      Object.assign(schemas.S11.properties, extra);
+      const ok = { "200": { description: "ok", content: { "application/json": { schema: { $ref: "#/components/schemas/S0" } } } } };
+      return buildSpec({
+        openapi: "3.0.0",
+        info: { title: "t", version: "1" },
+        paths: { "/a": { get: { responses: ok } }, "/b": { get: { responses: { "204": { description: "none" } } } } },
+        components: { schemas },
+      });
+    };
+    expect(diffSpecs(dense({}), dense({}), {}).modified).toEqual([]);
+    const d = diffSpecs(dense({}), dense({ flag: { type: "boolean" } }), {});
+    expect(d.modified.map((m) => m.id)).toEqual(["GET /a"]);
+    expect(d.modified[0].changes.length).toBeGreaterThan(0);
   });
 });
 

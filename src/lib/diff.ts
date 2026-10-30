@@ -1,5 +1,5 @@
-import { Endpoint, expandRefs, getOperation, operationFingerprint, OperationInfo, ParsedSpec } from "./openapi";
-import { describeType, itemSchema, Json, normalize, singleValue, validate, variantsOf } from "./schema";
+import { DOC_ONLY_KEYS, Endpoint, getOperation, operationFingerprint, OperationInfo, ParsedSpec, structureKey } from "./openapi";
+import { deref, describeType, itemSchema, Json, normalize, singleValue, validate, variantsOf } from "./schema";
 import type { RequestState } from "./models";
 import { isJsonType, isStructuredType, paramKey } from "./request";
 import { parseJson } from "./json";
@@ -111,7 +111,7 @@ function diffOperation(oldDoc: Json, newDoc: Json, a: OperationInfo, b: Operatio
     }
     if (!p.required && np.required)
       out.push({ severity: "breaking", message: `${cap(p.in)} parameter “${p.name}” is now required` });
-    diffSchema(oldDoc, newDoc, p.schema, np.schema, `${p.in} parameter “${p.name}”`, "request", out, 0, new Set());
+    diffSchema(oldDoc, newDoc, p.schema, np.schema, `${p.in} parameter “${p.name}”`, "request", out, 0, new Map());
   }
   for (const [k, p] of bParams) {
     if (aParams.has(k)) continue;
@@ -130,7 +130,7 @@ function diffOperation(oldDoc: Json, newDoc: Json, a: OperationInfo, b: Operatio
     for (const c of a.body.contents) {
       const nc = bTypes.get(c.type);
       if (!nc) out.push({ severity: "breaking", message: `Request content type ${c.type} removed` });
-      else diffSchema(oldDoc, newDoc, c.schema, nc.schema, "body", "request", out, 0, new Set());
+      else diffSchema(oldDoc, newDoc, c.schema, nc.schema, "body", "request", out, 0, new Map());
     }
     for (const c of b.body.contents)
       if (!a.body.contents.some((x) => x.type === c.type))
@@ -144,7 +144,7 @@ function diffOperation(oldDoc: Json, newDoc: Json, a: OperationInfo, b: Operatio
     else {
       const oc = r.contents.find((c) => isJsonType(c.type)) ?? r.contents[0];
       const ncc = nr.contents.find((c) => c.type === oc?.type);
-      if (oc && ncc) diffSchema(oldDoc, newDoc, oc.schema, ncc.schema, `response ${r.status}`, "response", out, 0, new Set());
+      if (oc && ncc) diffSchema(oldDoc, newDoc, oc.schema, ncc.schema, `response ${r.status}`, "response", out, 0, new Map());
     }
   }
   for (const r of b.responses)
@@ -164,14 +164,68 @@ function diffSchema(
   mode: "request" | "response",
   out: Change[],
   depth: number,
-  seen: Set<string>,
+  seen: Map<string, number>,
 ) {
-  if (depth > 6 || a === undefined || b === undefined) return;
+  if (depth > 6 || a === undefined || b === undefined || structureKey(oldDoc, a) === structureKey(newDoc, b)) return;
   const sa = normalize(oldDoc, a);
   const sb = normalize(newDoc, b);
-  const pairKey = `${sa._refName ?? ""}|${sb._refName ?? ""}|${where}`;
-  if (sa._refName && seen.has(pairKey)) return;
-  seen.add(pairKey);
+  // A pair of named schemas is compared once, at the shallowest place it shows up: big specs
+  // reuse schemas everywhere, and comparing them at every path grows exponentially.
+  if (sa._refName) {
+    const pairKey = `${sa._refName}|${sb._refName ?? ""}`;
+    if ((seen.get(pairKey) ?? Infinity) <= depth) return;
+    seen.set(pairKey, depth);
+    // Every operation that uses the pair would compare it again; do it once per diff, with a
+    // placeholder for the path that's filled in for each place it shows up.
+    let memo = pairMemo.get(oldDoc)?.get(newDoc);
+    if (!memo) {
+      const byNew = pairMemo.get(oldDoc) ?? new WeakMap();
+      pairMemo.set(oldDoc, byNew);
+      byNew.set(newDoc, (memo = new Map()));
+    }
+    const memoKey = `${pairKey}|${mode}|${depth}`;
+    let changes = memo.get(memoKey);
+    if (!changes) {
+      changes = [];
+      compareSchemas(oldDoc, newDoc, a, b, sa, sb, WHERE, mode, changes, depth, new Map([[pairKey, depth]]));
+      for (const c of changes) c.owner ??= [pairKey, depth];
+      memo.set(memoKey, changes);
+    }
+    // Pairs nested inside were already compared here if this call met them first, at no greater depth.
+    const shown = new Map<string, boolean>([[pairKey, true]]);
+    for (const c of changes) {
+      const [owner, ownerDepth] = c.owner!;
+      if (!shown.has(owner)) {
+        const show = (seen.get(owner) ?? Infinity) > ownerDepth;
+        shown.set(owner, show);
+        if (show) seen.set(owner, ownerDepth);
+      }
+      if (shown.get(owner)) out.push({ ...c, message: cap(where) + c.message.slice(WHERE.length) });
+    }
+    return;
+  }
+  compareSchemas(oldDoc, newDoc, a, b, sa, sb, where, mode, out, depth, seen);
+}
+
+/** Stands in for the path in changes cached by `diffSchema`; every message starts with it. */
+const WHERE = "\u0001";
+/** A cached change, with the named schema pair (and its depth) whose comparison produced it. */
+type OwnedChange = Change & { owner?: [string, number] };
+const pairMemo = new WeakMap<object, WeakMap<object, Map<string, OwnedChange[]>>>();
+
+function compareSchemas(
+  oldDoc: Json,
+  newDoc: Json,
+  a: Json,
+  b: Json,
+  sa: Json,
+  sb: Json,
+  where: string,
+  mode: "request" | "response",
+  out: Change[],
+  depth: number,
+  seen: Map<string, number>,
+) {
   const req = mode === "request";
 
   const ta = describeType(oldDoc, a);
@@ -262,7 +316,7 @@ function diffUnions(
   mode: "request" | "response",
   out: Change[],
   depth: number,
-  seen: Set<string>,
+  seen: Map<string, number>,
 ) {
   const ua = variantsOf(oldDoc, sa);
   const ub = variantsOf(newDoc, sb);
@@ -273,7 +327,7 @@ function diffUnions(
     return;
   }
   const keyed = (doc: Json, list: { schema: Json; label: string }[]) =>
-    list.map((v, i) => ({ ...v, i, fixed: fixedValues(doc, v.schema, "", 0) }));
+    list.map((v, i) => ({ ...v, i, fixed: variantValues(doc, v.schema) }));
   const va = keyed(oldDoc, ua.list);
   const vb = keyed(newDoc, ub.list);
   // Values every variant shares (like `success: false` on all errors) don't tell them apart.
@@ -310,6 +364,18 @@ function diffUnions(
     if (!byA.has(id(v))) out.push({ severity: req ? "info" : "warning", message: `${cap(where)}: variant added — ${name(v, vb)}` });
 }
 
+const variantCache = new WeakMap<object, WeakMap<object, Record<string, Json>>>();
+
+/** `fixedValues` of a union variant, cached: big specs repeat the same unions in every operation. */
+function variantValues(doc: Json, schema: Json): Record<string, Json> {
+  if (!schema || typeof schema !== "object") return fixedValues(doc, schema, "", 0);
+  let cache = variantCache.get(doc);
+  if (!cache) variantCache.set(doc, (cache = new WeakMap()));
+  let values = cache.get(schema);
+  if (!values) cache.set(schema, (values = fixedValues(doc, schema, "", 0)));
+  return values;
+}
+
 /** Properties (up to two levels deep) that allow exactly one value, by dotted path. */
 function fixedValues(doc: Json, schema: Json, prefix: string, depth: number): Record<string, Json> {
   const out: Record<string, Json> = {};
@@ -324,22 +390,34 @@ function fixedValues(doc: Json, schema: Json, prefix: string, depth: number): Re
 
 /** Last resort when no known kind of change explains the difference: name the exact spots. */
 function rawChanges(oldSpec: ParsedSpec, a: Endpoint, newSpec: ParsedSpec, b: Endpoint): Change[] {
-  const resolved = (spec: ParsedSpec, e: Endpoint) => {
+  const operation = (spec: ParsedSpec, e: Endpoint) => {
     const item = spec.doc.paths[e.path] ?? {};
-    return expandRefs(spec.doc, { parameters: item.parameters, ...item[e.method.toLowerCase()] });
+    return { parameters: item.parameters, ...item[e.method.toLowerCase()] };
   };
+  const oldDoc = oldSpec.doc;
+  const newDoc = newSpec.doc;
   const out: Change[] = [];
-  const walk = (x: Json, y: Json, path: string[]) => {
-    if (out.length >= 10 || JSON.stringify(x) === JSON.stringify(y)) return;
+  // $refs are followed as the walk descends; `refs` holds the pairs on the current path, so a
+  // recursive schema is walked once.
+  const walk = (x: Json, y: Json, path: string[], refs: Set<string>) => {
+    if (out.length >= 10 || structureKey(oldDoc, x) === structureKey(newDoc, y)) return;
+    const pair = `${x?.$ref ?? ""}|${y?.$ref ?? ""}`;
+    if (pair !== "|") {
+      if (refs.has(pair)) return;
+      refs = new Set(refs).add(pair);
+      x = deref(oldDoc, x);
+      y = deref(newDoc, y);
+    }
     if (x && y && typeof x === "object" && typeof y === "object" && Array.isArray(x) === Array.isArray(y)) {
-      for (const k of new Set([...Object.keys(x), ...Object.keys(y)])) walk(x[k], y[k], [...path, k]);
+      for (const k of new Set([...Object.keys(x), ...Object.keys(y)]))
+        if (Array.isArray(x) || !DOC_ONLY_KEYS.has(k)) walk(x[k], y[k], [...path, k], refs);
       return;
     }
     const where = path.filter((p) => p !== "content" && p !== "schema" && p !== "properties").join(" › ");
     const show = (v: Json) => (v === undefined ? "—" : trim(JSON.stringify(v)));
     out.push({ severity: "info", message: `${where}: ${show(x)} → ${show(y)}` });
   };
-  walk(resolved(oldSpec, a), resolved(newSpec, b), []);
+  walk(operation(oldSpec, a), operation(newSpec, b), [], new Set());
   return out.length ? out : [{ severity: "info", message: "Schema details changed" }];
 }
 
@@ -425,5 +503,7 @@ function cap(s: string): string {
 
 function dedupe(list: Change[]): Change[] {
   const seen = new Set<string>();
-  return list.filter((c) => (seen.has(c.message) ? false : (seen.add(c.message), true)));
+  return list
+    .filter((c) => (seen.has(c.message) ? false : (seen.add(c.message), true)))
+    .map(({ severity, message }) => ({ severity, message }));
 }

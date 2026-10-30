@@ -203,36 +203,113 @@ function contentList(doc: Json, content: Json): MediaContent[] {
   });
 }
 
-/** Inlines $refs up to a depth so two versions of an operation can be compared structurally. */
-export function expandRefs(doc: Json, node: Json, depth = 0, stack: string[] = []): Json {
+/** Keys that don't change how an operation is called. */
+export const DOC_ONLY_KEYS = new Set(["description", "summary", "example", "examples", "externalDocs"]);
+
+/** A node with keys sorted and docs dropped, $refs left as they are; collects the refs it meets. */
+function shallowShape(node: Json, refs: Set<string>): Json {
   if (node === null || typeof node !== "object") return node;
-  if (Array.isArray(node)) return node.map((n) => expandRefs(doc, n, depth, stack));
-  if (typeof node.$ref === "string") {
-    if (stack.includes(node.$ref) || depth > 8) return { $recursive: node.$ref.split("/").pop() };
-    return expandRefs(doc, deref(doc, node), depth + 1, [...stack, node.$ref]);
-  }
+  if (Array.isArray(node)) return node.map((n) => shallowShape(n, refs));
+  if (typeof node.$ref === "string") refs.add(node.$ref);
   const out: Record<string, Json> = {};
-  for (const k of Object.keys(node).sort()) {
-    if (k === "description" || k === "summary" || k === "example" || k === "examples" || k === "externalDocs")
-      continue;
-    out[k] = expandRefs(doc, node[k], depth, stack);
-  }
+  for (const k of Object.keys(node).sort()) if (!DOC_ONLY_KEYS.has(k)) out[k] = shallowShape(node[k], refs);
   return out;
+}
+
+/** Per document: each $ref target's own shape, and hashes covering everything it leads to. */
+interface RefGraph {
+  shapes: Map<string, { hash: string; refs: string[] }>;
+  deep: Map<string, string>;
+  nodeKeys: WeakMap<object, string>;
+}
+const refGraphs = new WeakMap<object, RefGraph>();
+
+function refGraph(doc: Json): RefGraph {
+  let g = refGraphs.get(doc);
+  if (!g) refGraphs.set(doc, (g = { shapes: new Map(), deep: new Map(), nodeKeys: new WeakMap() }));
+  return g;
+}
+
+function refShape(doc: Json, g: RefGraph, ref: string) {
+  let shape = g.shapes.get(ref);
+  if (!shape) {
+    const refs = new Set<string>();
+    const text = JSON.stringify(shallowShape(deref(doc, { $ref: ref }), refs) ?? null);
+    g.shapes.set(ref, (shape = { hash: hashText(text), refs: [...refs] }));
+  }
+  return shape;
+}
+
+/** Hash of a $ref target and everything reachable from it. Mutually recursive schemas (strongly
+ *  connected components, found with Tarjan's algorithm) share one hash over all their members. */
+function deepHash(doc: Json, g: RefGraph, ref: string): string {
+  const done = g.deep.get(ref);
+  if (done !== undefined) return done;
+  const index = new Map<string, number>();
+  const low = new Map<string, number>();
+  const stack: string[] = [];
+  const onStack = new Set<string>();
+  const visit = (v: string) => {
+    index.set(v, index.size);
+    low.set(v, index.get(v)!);
+    stack.push(v);
+    onStack.add(v);
+    for (const w of refShape(doc, g, v).refs) {
+      if (g.deep.has(w)) continue;
+      if (!index.has(w)) {
+        visit(w);
+        low.set(v, Math.min(low.get(v)!, low.get(w)!));
+      } else if (onStack.has(w)) low.set(v, Math.min(low.get(v)!, index.get(w)!));
+    }
+    if (low.get(v) !== index.get(v)) return;
+    const members: string[] = [];
+    let m: string;
+    do {
+      m = stack.pop()!;
+      onStack.delete(m);
+      members.push(m);
+    } while (m !== v);
+    const inside = new Set(members);
+    const outside = new Set<string>();
+    for (const x of members) for (const r of refShape(doc, g, x).refs) if (!inside.has(r)) outside.add(r);
+    const own = members.sort().map((x) => `${x}=${refShape(doc, g, x).hash}`);
+    const reached = [...outside].sort().map((r) => `${r}=${g.deep.get(r)}`);
+    const component = hashText(`${own.join("\n")}\n\n${reached.join("\n")}`);
+    for (const x of members) g.deep.set(x, component);
+  };
+  visit(ref);
+  return g.deep.get(ref)!;
+}
+
+/**
+ * Identifies a node's structure, including everything its $refs lead to, so two versions can be
+ * compared. Referenced schemas are hashed once per document instead of being inlined: specs
+ * like Stripe's reference each other so densely that inlining yields hundreds of MB per operation.
+ */
+export function structureKey(doc: Json, node: Json): string {
+  if (node === null || typeof node !== "object") return JSON.stringify(node) ?? "undefined";
+  const g = refGraph(doc);
+  let key = g.nodeKeys.get(node);
+  if (key === undefined) {
+    const refs = new Set<string>();
+    const own = JSON.stringify(shallowShape(node, refs));
+    const reached = [...refs].sort().map((r) => `${r}=${deepHash(doc, g, r)}`);
+    g.nodeKeys.set(node, (key = hashText(`${own}\n${reached.join("\n")}`)));
+  }
+  return key;
 }
 
 export function operationFingerprint(spec: ParsedSpec, endpoint: Endpoint): string {
   const doc = spec.doc;
   const item = deref(doc, doc.paths[endpoint.path]) ?? {};
   const op = item[endpoint.method.toLowerCase()];
-  return JSON.stringify(
-    expandRefs(doc, {
-      params: [...(item.parameters ?? []), ...(op.parameters ?? [])],
-      body: op.requestBody,
-      responses: op.responses,
-      security: op.security ?? doc.security,
-      deprecated: op.deprecated,
-    }),
-  );
+  return structureKey(doc, {
+    params: [...(item.parameters ?? []), ...(op.parameters ?? [])],
+    body: op.requestBody,
+    responses: op.responses,
+    security: op.security ?? doc.security,
+    deprecated: op.deprecated,
+  });
 }
 
 export function hashText(text: string): string {
