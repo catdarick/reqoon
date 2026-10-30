@@ -18,7 +18,8 @@ import {
   uid,
 } from "../lib/models";
 import { bundleRefs, hasExternalRefs } from "../lib/bundle";
-import { buildSpec, getOperation, hashText, OperationInfo, parseSpecText, ParsedSpec, storedSpecText } from "../lib/openapi";
+import { buildSpec, getOperation, hashText, OperationInfo, ParsedSpec, storedSpecText } from "../lib/openapi";
+import { parseSpecAsync } from "../lib/parseAsync";
 import * as platform from "../lib/platform";
 import { DEFAULT_SHORTCUTS } from "../lib/shortcuts";
 import { defaultValue, Json } from "../lib/schema";
@@ -188,7 +189,7 @@ async function loadSpec(id: string) {
   }
   try {
     const c = get().collections.find((x) => x.id === id);
-    const doc = parseSpecText(text);
+    const doc = await parseSpecAsync(text);
     const spec = buildSpec(doc, c?.source.kind === "url" ? c.source.location : undefined);
     set((s) => ({ specs: { ...s.specs, [id]: spec } }));
     // Specs saved by older versions as YAML are rewritten once, so later launches parse JSON.
@@ -382,7 +383,7 @@ async function withReferencedFiles(text: string, location: string, load: (locati
   if (!/["']?\$ref["']?\s*:(?![\s"']*#)/.test(text)) return text;
   let doc: Json;
   try {
-    doc = parseSpecText(text);
+    doc = await parseSpecAsync(text);
   } catch {
     return text; // Reported by the caller, which parses it again.
   }
@@ -392,7 +393,7 @@ async function withReferencedFiles(text: string, location: string, load: (locati
 
 export async function importCollection(source: CollectionSource, text?: string): Promise<string> {
   const loaded = await loadSpecFromSource(source, text);
-  const doc = parseSpecText(loaded.text);
+  const doc = await parseSpecAsync(loaded.text);
   const spec = buildSpec(doc, source.kind === "url" ? source.location : undefined);
   if (hasExternalRefs(doc)) throw new Error("The spec references other files. Import it from its URL or file, so they can be loaded next to it.");
   const id = uid();
@@ -904,7 +905,7 @@ export async function checkForUpdates(id: string, opts: { manual?: boolean } = {
     if (hash !== c.hash && hash !== c.dismissedHash && hash !== c.pending?.hash) {
       let specText: string;
       try {
-        const doc = parseSpecText(loaded.text);
+        const doc = await parseSpecAsync(loaded.text);
         buildSpec(doc);
         // Parsed once here; the review and the sync then work from JSON.
         specText = storedSpecText(loaded.text, doc);
@@ -1001,7 +1002,7 @@ export async function applySync(id: string) {
   const c = get().collections.find((x) => x.id === id);
   const oldSpec = get().specs[id];
   if (!c?.pending) return;
-  const newSpec = buildSpec(parseSpecText(c.pending.specText), c.source.kind === "url" ? c.source.location : undefined);
+  const newSpec = buildSpec(await parseSpecAsync(c.pending.specText), c.source.kind === "url" ? c.source.location : undefined);
   const prevText = await platform.loadState(`spec_${id}`);
   if (prevText != null) await platform.saveState(`spec_${id}_prev`, prevText);
   await platform.saveState(`spec_${id}`, c.pending.specText);
@@ -1061,7 +1062,7 @@ export async function revertSync(id: string) {
   const prevText = await platform.loadState(`spec_${id}_prev`);
   if (!c?.previous || prevText == null) return;
   const curText = await platform.loadState(`spec_${id}`);
-  const doc = parseSpecText(prevText);
+  const doc = await parseSpecAsync(prevText);
   const spec = buildSpec(doc, c.source.kind === "url" ? c.source.location : undefined);
   await platform.saveState(`spec_${id}`, storedSpecText(prevText, doc));
   set((s) => ({ specs: { ...s.specs, [id]: spec }, specErrors: { ...s.specErrors, [id]: "" } }));

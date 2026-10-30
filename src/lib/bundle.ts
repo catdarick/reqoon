@@ -5,7 +5,7 @@
 // the name the UI shows for a schema, shared objects are stored once, and recursive schemas keep
 // working. A $ref that stands for a whole map (`securitySchemes: {$ref: ...}`) is replaced by the
 // map itself, because maps are read directly rather than through deref.
-import { parseSpecText } from "./openapi";
+import { parseSpecAsync } from "./parseAsync";
 import { resolvePointer, type Json } from "./schema";
 
 export const BUNDLE_KEY = "x-bundled";
@@ -57,7 +57,7 @@ export async function bundleRefs(doc: Json, location: string, load: (location: s
           throw new Error(`Could not load ${loc}, referenced by the spec: ${e}`);
         }
         try {
-          return [loc, parseSpecText(text)];
+          return [loc, await parseSpecAsync(text)];
         } catch (e) {
           throw new Error(`Could not parse ${loc}, referenced by the spec: ${e}`);
         }
